@@ -1,0 +1,17 @@
+#Setup Guide
+
+Install Arduino IDE
+
+Install required libraries
+
+Select ESP32-S3 board
+
+Upload milk_prevention.ino
+
+Mount sensor above vessel
+
+Calibrate baseline
+
+Test using water
+
+Run final test with milk
