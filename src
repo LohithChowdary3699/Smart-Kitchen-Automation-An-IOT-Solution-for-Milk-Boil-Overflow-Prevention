@@ -1,1 +1,128 @@
+#define BLYNK_TEMPLATE_ID "TMPL3AYqsPTBh"
+#define BLYNK_TEMPLATE_NAME "MilkBoilPrevention"
+#define BLYNK_AUTH_TOKEN "gZZVnGlBFf_bcEAnMLL-5uqV1lRS6F96"
 
+#include <Wire.h>
+#include <VL53L0X.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <ESP32Servo.h>
+#include "rm67162.h"
+#include "TFT_eSPI.h"
+#include "NotoSansBold15.h"
+#include "NotoSansBold36.h"  
+
+// Blynk credentials
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "User name";
+char pass[] = "password";
+
+// Variables for motor, distance measurement, and display
+TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite sprite = TFT_eSprite(&tft);
+VL53L0X sensor;
+Servo servo;
+
+float distanceFromMilk;
+int motorPin = 2;  // Servo control pin
+int distanceThreshold = 20;  // Distance threshold in mm
+long initialDistance = 0;
+int count = 0; // Counts initial readings for calibration
+int status = 0; // 0: initializing, 1: task started, 2: task complete
+bool motorStatus = false; // Motor status (ON/OFF)
+BlynkTimer timer;  // Blynk timer
+
+void setup() {
+  // Initialize Serial, Blynk, and WiFi
+  Serial.begin(115200);
+  Blynk.begin(auth, ssid, pass);
+
+  // Initialize servo, display, and sensor
+  servo.attach(motorPin);
+  servo.write(90);  // Set servo to a neutral position initially
+  
+  sprite.createSprite(536, 241);
+  sprite.setSwapBytes(1);
+  rm67162_init();
+  lcd_setRotation(1);
+
+  Wire.begin(42, 41);
+  sensor.setTimeout(500);
+  if (!sensor.init()) {
+    Serial.println("Failed to initialize sensor!");
+    while (1) {}
+  }
+  sensor.startContinuous();
+
+  // Set up timer to send data to Blynk every second
+  timer.setInterval(1000L, sendSensorData);
+}
+
+void sendSensorData() {
+  // Send distance and motor status to Blynk
+  Blynk.virtualWrite(V1, distanceFromMilk);
+  Blynk.virtualWrite(V2, motorStatus ? 1 : 0);
+  drawDisplay();
+}
+
+void drawDisplay() {
+  // Clear and update display with current readings
+  sprite.fillSprite(TFT_BLACK);
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  sprite.loadFont(NotoSansBold15);
+  sprite.drawString("Milk Boil Prevention System", 10, 0);
+  sprite.unloadFont();
+
+  sprite.loadFont(NotoSansBold36);
+  sprite.setTextColor(TFT_GREEN, TFT_BLACK);
+  sprite.drawString("Distance: " + String(distanceFromMilk) + "mm", 10, 50);
+  sprite.unloadFont();
+
+  sprite.loadFont(NotoSansBold15);
+  sprite.setTextColor(TFT_RED, TFT_BLACK);
+  sprite.drawString(motorStatus ? "Motor Status: ON" : "Motor Status: OFF", 10, 120);
+  sprite.unloadFont();
+  
+  lcd_PushColors(0, 0, 536, 240, (uint16_t*)sprite.getPointer());
+}
+
+void monitorDistance() {
+  distanceFromMilk = sensor.readRangeContinuousMillimeters();
+  if (sensor.timeoutOccurred()) {
+    Serial.println("Sensor Timeout!");
+  }
+}
+
+void controlMotor() {
+  // Calibrate initial distance in the first 10 readings
+  if (count < 10) {
+    initialDistance += distanceFromMilk;
+  } else if (count == 10) {
+    initialDistance /= 10;
+    status = 1;
+    Serial.print("Initial distance set: ");
+    Serial.println(initialDistance);
+  }
+
+  // Check if motor needs to turn on
+  if (status == 1 && (distanceFromMilk <= (initialDistance - distanceThreshold)) && !motorStatus) {
+    motorStatus = true;
+    servo.write(0);  // Turn servo to activate motor
+    Blynk.logEvent("motor_on", "Motor activated to prevent boiling");
+    Serial.println("Motor ON");
+  } else if (status == 1 && (distanceFromMilk > (initialDistance - distanceThreshold)) && motorStatus) {
+    motorStatus = false;
+    servo.write(90);  // Neutral position to turn off
+    Blynk.logEvent("motor_off", "Motor deactivated");
+    Serial.println("Motor OFF");
+  }
+  count++;
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+  monitorDistance();
+  controlMotor();
+}
